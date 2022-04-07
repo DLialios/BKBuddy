@@ -1,24 +1,30 @@
 #include <ws2tcpip.h>
-#include <iostream>
 #include <chrono>
 
 #pragma comment (lib, "Ws2_32.lib")
 
-char* time_msg = new char[11];
+#define TIME_FMT "[%H:%M:%S]"
+
+char*  time_msg;
+int    tmsg_len;
 
 void update_time() {
     using namespace std;
-    using sysclock = chrono::system_clock;
-    time_t t = sysclock::to_time_t(sysclock::now());
+    using sclk = chrono::system_clock;
+    time_t t = sclk::to_time_t(sclk::now());
     tm* local = localtime(&t);
-    strftime(time_msg, 11, "[%H:%M:%S]", local);
+    strftime(time_msg, tmsg_len, TIME_FMT, local);
+}
+
+void pmsg(const char* str, FILE* f) {
+    update_time();
+    fprintf(f, "%s %s\n", time_msg, str);
 }
 
 SOCKET init_socket(const char* host, const char* port) {
     WSAData wsadata;
     if (WSAStartup(MAKEWORD(2, 2), &wsadata)) {
-        update_time();
-        std::cerr << time_msg << " init_socket: WSAStartup failed\n";
+        pmsg("init_socket: WSAStartup failed", stderr);
         exit(1);
     }
 
@@ -28,8 +34,7 @@ SOCKET init_socket(const char* host, const char* port) {
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
     if (getaddrinfo(host, port, &hints, &result)) {
-        update_time();
-        std::cerr << time_msg << " init_socket: getaddrinfo failed\n";
+        pmsg("init_socket: getaddrinfo failed", stderr);
         WSACleanup();
         exit(1);
     }
@@ -40,14 +45,13 @@ SOCKET init_socket(const char* host, const char* port) {
             result->ai_protocol
             );
     if (sock == INVALID_SOCKET) {
-        update_time();
-        std::cerr << time_msg << " init_socket: socket init failure\n";
+        pmsg("init_socket: socket init failure", stderr);
         freeaddrinfo(result);
         WSACleanup();
         exit(1);
     }
 
-    for (struct addrinfo* ptr = result; ptr != NULL; ptr = ptr->ai_next) {
+    for (struct addrinfo* ptr = result; ptr != nullptr; ptr = ptr->ai_next) {
         if (connect(sock, ptr->ai_addr, ptr->ai_addrlen) == SOCKET_ERROR) {
             closesocket(sock);
             sock = INVALID_SOCKET;
@@ -58,8 +62,7 @@ SOCKET init_socket(const char* host, const char* port) {
     freeaddrinfo(result);
 
     if (sock == INVALID_SOCKET) {
-        update_time();
-        std::cerr << time_msg << " init_socket: socket connect failure\n";
+        pmsg("init_socket: socket connect failure", stderr);
         WSACleanup();
         exit(1);
     }
@@ -68,23 +71,21 @@ SOCKET init_socket(const char* host, const char* port) {
 }
 
 int main(int argc, char** argv) {
+    tmsg_len = strlen(TIME_FMT) + 1;
+    time_msg = new char[tmsg_len];
 
     auto bail = [] {
-        std::cout << "Exit: invalid args\n";
-        return 1;
+        pmsg("Exit: invalid args", stdout);
+        exit(1);
     };
 
     if (argc != 4) bail();
     unsigned short vk = strtoul(argv[3], nullptr, 16);
     if (vk < 0x01 || vk > 0xFE) bail();
 
-    update_time();
-    std::cout << time_msg << " Initiating connection...\n";
-
-    SOCKET sock = init_socket(argv[1],argv[2]);
-
-    update_time();
-    std::cout << time_msg << " Handshake with remote, blocking on recv\n";
+    pmsg("Initiating connection...", stdout);
+    SOCKET sock = init_socket(argv[1], argv[2]);
+    pmsg("Handshake with remote, blocking on recv", stdout);
 
     INPUT inputs[2];
     ZeroMemory(inputs, sizeof(inputs));
@@ -100,18 +101,15 @@ int main(int argc, char** argv) {
         n = recv(sock, &buf, 1, 0);
         if (static_cast<int>(buf) == 1) {
             UINT count = SendInput(ARRAYSIZE(inputs), inputs, sizeof(INPUT));
-            update_time();
-            std::cout << time_msg;
             if (count < ARRAYSIZE(inputs))
-                std::cout << " Insertion into kbd inputstream was blocked\n";
+                pmsg("Insertion into kbd inputstream was blocked", stdout);
             else
-                std::cout << " Key " << vk << " pressed\n";
+                pmsg("Keypress", stdout);
         }
     } while (n > 0);
 
     closesocket(sock);
     WSACleanup();
-    update_time();
-    std::cout << time_msg << " Exit: remote closed connection\n";
+    pmsg("Exit: remote closed connection", stdout);
     return 0;
 }
