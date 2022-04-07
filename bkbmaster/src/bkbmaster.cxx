@@ -1,29 +1,37 @@
 #include <X11/Xlib.h>
-#include <csignal>
-#include <netinet/in.h>
-#include <unistd.h>
+#include <arpa/inet.h>
 #include <signal.h>
 #include <string.h>
-#include <cassert>
 #include <iostream>
-#include <chrono>
+#include <thread>
+#include <cassert>
 
-#define PORT 12667
+#define PORT 27015
+#define KEEPALIVE 120s
 #define F1 67
 #define KEYCODE F1
 
+static char time_msg[11];
 static int sockfd, client_sockfd;
+static std::mutex cfd_mutex;
+static struct sockaddr_in cli_addr;
+
+void update_time() {
+    using namespace std;
+    using sclk = chrono::system_clock;
+    time_t t = sclk::to_time_t(sclk::now());
+    tm* local = localtime(&t);
+    strftime(time_msg, 11, "[%H:%M:%S]", local);
+}
 
 void on_keypress() {
+    const std::lock_guard<std::mutex> lock(cfd_mutex);
+
     char buf = 1;
     assert(write(client_sockfd, &buf, 1) >= 0);
 
-    char msg [11];
-    using sysclock = std::chrono::system_clock;
-    std::time_t t = sysclock::to_time_t(sysclock::now());
-    std::tm* local = std::localtime(&t);
-    std::strftime(msg, 11, "[%H:%M:%S]", local);
-    std::cout << msg << " Notify sent\n";
+    update_time();
+    std::cout << time_msg << " Notify sent\n";
 }
 
 void key_listener() {
@@ -71,12 +79,12 @@ void init_sockets() {
 
     listen(sockfd, 5);
 
-    struct sockaddr_in cli_addr;
     socklen_t client_len = sizeof(cli_addr);
     client_sockfd = accept(sockfd, 
             (struct sockaddr*) &cli_addr,
             &client_len
             );
+    assert(client_sockfd >= 0);
 }
 
 int main(int argc, const char** argv) {
@@ -84,19 +92,31 @@ int main(int argc, const char** argv) {
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGPIPE);
-    sigprocmask(SIG_BLOCK, &mask, NULL);
-
-    // register SIGINT handler
-    struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sigfillset(&sa.sa_mask);
-    sa.sa_handler = [](int) {
-        close(sockfd);
-        close(client_sockfd);
-        exit(0);
-    };
-    sigaction(SIGINT, &sa, NULL);
+    pthread_sigmask(SIG_BLOCK, &mask, NULL);
 
     init_sockets();
+
+    char addr[16];
+    inet_ntop(AF_INET, &cli_addr.sin_addr.s_addr, addr, sizeof(addr));
+    update_time();
+    std::cout 
+        << time_msg
+        << " Connection from "
+        << addr << ':' << cli_addr.sin_port << '\n';
+
+    auto keepalive = []{
+        using namespace std::chrono_literals;
+
+        char buf = 2;
+        while (true) {
+            std::this_thread::sleep_for(KEEPALIVE);
+
+            const std::lock_guard<std::mutex> lock(cfd_mutex);
+
+            assert(write(client_sockfd, &buf, 1) >= 0);
+        }
+    };
+    std::thread(keepalive).detach();
+
     key_listener();
 }
