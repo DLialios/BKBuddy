@@ -1,5 +1,4 @@
 #include <ws2tcpip.h>
-#include <cassert>
 #include <iostream>
 #include <chrono>
 
@@ -17,7 +16,11 @@ void update_time() {
 
 SOCKET init_socket(const char* host, const char* port) {
     WSAData wsadata;
-    assert(!WSAStartup(MAKEWORD(2, 2), &wsadata));
+    if (WSAStartup(MAKEWORD(2, 2), &wsadata)) {
+        update_time();
+        std::cerr << time_msg << " init_socket: WSAStartup failed\n";
+        exit(1);
+    }
 
     struct addrinfo hints, *result = nullptr;
     ZeroMemory(&hints, sizeof(hints));
